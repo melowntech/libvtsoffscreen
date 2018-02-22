@@ -83,6 +83,14 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
     return ctx;
 }
 
+void loadGlFunctions()
+{
+    static std::mutex mutex;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    vts::renderer::loadGlFunctions(&snapper_cpp_getGlProcAddress);
+}
+
 void waitForGl()
 {
     auto fence(::glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0));
@@ -197,6 +205,9 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx
 
         // TODO: query device
         mo.targetResourcesMemory = 1500000000l;
+
+        // do not scale tiles
+        mo.renderTilesScale = 1.0;
     }
 
     {
@@ -210,9 +221,9 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx
         };
     }
 
-    // notify the vts renderer library on how to load OpenGL function
-    // pointers
-    vts::renderer::loadGlFunctions(&snapper_cpp_getGlProcAddress);
+    // notify the vts renderer library on how to load OpenGL function pointers
+    loadGlFunctions();
+
     // and initialize the renderer library
     // this will load required shaders and other local files
     renderer_.initialize();
