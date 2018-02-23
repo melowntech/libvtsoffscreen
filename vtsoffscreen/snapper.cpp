@@ -13,7 +13,10 @@
 
 #include "glsupport/egl.hpp"
 #include "utility/gl.hpp"
+
+#ifdef VTSOFFSCREEN_HAS_OPTICS
 #include "optics/cameragladaptor.hpp"
+#endif
 
 #include "geo/csconvertor.hpp"
 
@@ -53,7 +56,7 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
 
     if (!::eglBindAPI(EGL_OPENGL_API)) {
         LOGTHROW(err2, glsupport::egl::Error)
-            << "EGL: Cannot bind OpenGL ES 2 API ("
+            << "EGL: Cannot bind OpenGL API ("
             << glsupport::egl::detail::error() << ").";
     }
 
@@ -157,17 +160,15 @@ Snapshot::Snapshot(const math::Size2 &size)
 
 class Snapper::Detail {
 public:
-    Detail(const Config &config);
-    Detail(const Config &config, const glsupport::egl::Device &device);
+    Detail(const SnapperConfig &config);
+    Detail(const SnapperConfig &config, const glsupport::egl::Device &device);
 
     ~Detail();
 
     Snapshot snap(const View &view);
 
-    math::Point4 prod1(const math::Point4 &p) const;
-
 private:
-    Detail(const glsupport::egl::Context &ctx, const Config &config);
+    Detail(const glsupport::egl::Context &ctx, const SnapperConfig &config);
 
     glsupport::egl::Context ctx_;
     vts::Map map_;
@@ -176,7 +177,7 @@ private:
 };
 
 Snapper::Detail::Detail(const glsupport::egl::Context &ctx
-                        , const Config &config)
+                        , const SnapperConfig &config)
     : ctx_(ctx)
     , map_([&]() -> vts::MapCreateOptions
        {
@@ -247,11 +248,11 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx
     // map config is ready we can proceed
 }
 
-Snapper::Detail::Detail(const Config &config)
+Snapper::Detail::Detail(const SnapperConfig &config)
     : Detail(eglContext(), config)
 {}
 
-Snapper::Detail::Detail(const Config &config
+Snapper::Detail::Detail(const SnapperConfig &config
                         , const glsupport::egl::Device &device)
     : Detail(eglContext(device), config)
 {}
@@ -262,20 +263,6 @@ Snapper::Detail::~Detail()
     map_.dataFinalize();
     map_.renderFinalize();
 }
-math::Point4 Snapper::Detail::prod1(const math::Point4 &p) const
-{
-    double in[3] = { p[0] / p[3], p[1] / p[3], p[2] / p[3] };
-    math::Point4 out;
-    map_.convert(in, &out[0], vts::Srs::Custom1, vts::Srs::Physical);
-    out[3] = 1.0;
-    return out;
-}
-
-inline math::Point4 prod(const Snapper::Detail &snapper, const math::Point4 &p)
-{
-    return snapper.prod1(p);
-}
-
 namespace {
 
 class MapCallbackHolder : boost::noncopyable {
@@ -287,6 +274,72 @@ private:
     MapCallbacks mc_;
 };
 
+class PositionSetter : public boost::static_visitor<>
+{
+public:
+    PositionSetter(vts::Map &map) : map_(map) {}
+
+    void operator()(const VtsJsonPosition &position) const {
+        map_.setPositionJson(position.position);
+    }
+
+    void operator()(const VtsSerializedPosition &position) const {
+        map_.setPositionUrl(position.position);
+    }
+
+#ifdef VTSOFFSCREEN_HAS_OPTICS
+    // available only when compiled with liboptics
+    void operator()(const OpticsPosition &position) const;
+#endif
+
+    /** Helper for matrix-like point transformation. Converts homogeneous point
+     *  between from Custom1 SRS to Physical SRS.
+     */
+    math::Point4 prod1(const math::Point4 &p) const;
+
+private:
+    vts::Map &map_;
+};
+
+inline math::Point4 PositionSetter::prod1(const math::Point4 &p) const
+{
+    double in[3] = { p[0] / p[3], p[1] / p[3], p[2] / p[3] };
+    math::Point4 out;
+    map_.convert(in, &out[0], vts::Srs::Custom1, vts::Srs::Physical);
+    out[3] = 1.0;
+    return out;
+}
+
+inline math::Point4 prod(const PositionSetter &ps, const math::Point4 &p)
+{
+    return ps.prod1(p);
+}
+
+#ifdef VTSOFFSCREEN_HAS_OPTICS
+// available only when compiled with liboptics
+void PositionSetter::operator()(const OpticsPosition &position) const {
+    // transform position to destination SRS
+    const auto pos(position.position.transform(*this));
+
+    // we have to set position via callbacks
+    auto &mc(map_.callbacks());
+
+    mc.cameraOverrideView = [&pos](double *mat) {
+        optics::CameraGLAdaptor::glViewMatrix(pos, mat);
+    };
+
+    mc.cameraOverrideProj = [&position](double *mat) {
+        optics::CameraGLAdaptor::glProjectionMatrix
+        (position.camera, 10.0, 100000.0, mat);
+    };
+}
+#endif
+
+inline void setPosition(vts::Map &map, const Position &position)
+{
+    boost::apply_visitor(PositionSetter(map), position);
+}
+
 } // namespace
 
 Snapshot Snapper::Detail::snap(const View &view)
@@ -294,32 +347,11 @@ Snapshot Snapper::Detail::snap(const View &view)
     const auto screenSize(view.viewport.size());
     map_.setWindowSize(screenSize.width, screenSize.height);
 
-    // transform position to destination SRS
-    const auto position(view.position.transform(*this));
-
     // set temporary camera override hooks
     MapCallbackHolder mch(map_);
-    double near(0);
-    double far(0);
-    {
-        auto &mc(map_.callbacks());
 
-        mc.cameraOverrideView = [&position](double *mat) {
-            optics::CameraGLAdaptor::glViewMatrix(position, mat);
-        };
-
-        mc.cameraOverrideFovAspectNearFar = [&near, &far]
-            (double&, double&, double &n, double &f)
-        {
-            near = n;
-            far = f;
-        };
-
-        mc.cameraOverrideProj = [&view, near, far](double *mat) {
-            optics::CameraGLAdaptor::glProjectionMatrix
-                (view.camera, 10.0, 100000.0, mat);
-        };
-    }
+    // set position
+    setPosition(map_, view.position);
 
     // wait till we have all resources for rendering, perform at least once to
     // allow position change
@@ -373,11 +405,12 @@ Snapshot Snapper::Detail::snap(const View &view)
     return snapshot;
 }
 
-Snapper::Snapper(const Config &config)
+Snapper::Snapper(const SnapperConfig &config)
     : detail_(std::make_unique<Detail>(config))
 {}
 
-Snapper::Snapper(const Config &config, const glsupport::egl::Device &device)
+Snapper::Snapper(const SnapperConfig &config
+                 , const glsupport::egl::Device &device)
     : detail_(std::make_unique<Detail>(config, device))
 {}
 
@@ -388,7 +421,7 @@ Snapshot Snapper::snap(const View &view)
     return detail_->snap(view);
 }
 
-AsyncSnapper::AsyncSnapper(const Config &config)
+AsyncSnapper::AsyncSnapper(const SnapperConfig &config)
     : running_(false)
 {
     // make sure threads are released when something goes wrong
@@ -446,7 +479,7 @@ Snapshot AsyncSnapper::operator()(const View &view)
 }
 
 void AsyncSnapper::worker(int threadId
-                          , const Config &config
+                          , const SnapperConfig &config
                           , const glsupport::egl::Device &device)
 {
     dbglog::thread_id((threadId < 0)

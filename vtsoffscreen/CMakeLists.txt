@@ -1,10 +1,24 @@
 # bump version here
 set(vtsoffscreen_VERSION 1.1)
 
+# clear variables
+set(EXTRA_DEPENDS)
+set(EXTRA_DEFINITIONS)
+
+if(MODULE_optics_FOUND)
+  message(STATUS "vtsoffscreen: compiling in optics support")
+  list(APPEND EXTRA_DEPENDS optics>=1.1)
+  list(APPEND EXTRA_DEFINITIONS VTSOFFSCREEN_HAS_OPTICS=1)
+else()
+    message(STATUS "vtsoffscreen: compiling without optics support")
+endif()
+
 define_module(LIBRARY vtsoffscreen=${vtsoffscreen_VERSION}
-  DEPENDS geo>=1.28 optics>=1.1 geometry>=1.10 imgproc>=1.23
+  DEPENDS geo>=1.28 geometry>=1.10 imgproc>=1.23
   glsupport>=1.0 dbglog>=1.4
   VtsBrowser VtsRenderer OpenCV
+  ${EXTRA_DEPENDS}
+  DEFINITIONS ${EXTRA_DEFINITIONS}
   )
 
 set(vtsoffscreen_SOURCES

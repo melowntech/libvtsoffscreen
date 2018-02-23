@@ -10,24 +10,25 @@
 
 #include <opencv2/core/core.hpp>
 
-#include "optics/camera.hpp"
 #include "geo/srsdef.hpp"
 #include "glsupport/eglfwd.hpp"
+
+#include "./position.hpp"
 
 namespace vts::offscreen {
 
 using Image = cv::Mat_<cv::Vec3b>;
 
-struct Config {
+struct SnapperConfig {
     std::string mapConfigUrl;
 
     std::string authUrl;
 
-    /** Custom SRS #1, passed to createf VTS map.
+    /** Custom SRS #1, passed to created VTS map.
      */
     geo::SrsDefinition customSrs1;
 
-    /** Custom SRS #1, passed to createf VTS map.
+    /** Custom SRS #1, passed to created VTS map.
      */
     geo::SrsDefinition customSrs2;
 };
@@ -35,17 +36,13 @@ struct Config {
 /** View definition.
  */
 struct View {
-    /** Intrinsic parameters.
+    /** View position. Choose from alternatives (see position.hpp for details).
      */
-    optics::Camera::Parameters camera;
+    Position position;
 
-    /** Extrinsic parameters.
+    /** Viewport.
      */
-    optics::Camera::Position position;
-
-    /** Viewport definition
-     */
-    optics::Camera::Viewport viewport;
+    math::Viewport2 viewport;
 
     /** Keypoints to sample in the scene.
      */
@@ -83,11 +80,11 @@ class Snapper : public boost::noncopyable {
 public:
     /** Run snapper on default native display.
      */
-    Snapper(const Config &config);
+    Snapper(const SnapperConfig &config);
 
     /** Run snapper on provided EGL device.
      */
-    Snapper(const Config &config, const glsupport::egl::Device &device);
+    Snapper(const SnapperConfig &config, const glsupport::egl::Device &device);
 
     ~Snapper();
 
@@ -103,7 +100,7 @@ private:
  */
 class AsyncSnapper : public boost::noncopyable {
 public:
-    AsyncSnapper(const Config &config);
+    AsyncSnapper(const SnapperConfig &config);
 
     ~AsyncSnapper();
 
@@ -122,7 +119,7 @@ private:
 
     void stop();
 
-    void worker(int threadId, const Config &config
+    void worker(int threadId, const SnapperConfig &config
                 , const glsupport::egl::Device &device);
 
     std::vector<std::thread> threads_;
