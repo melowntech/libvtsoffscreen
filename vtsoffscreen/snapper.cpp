@@ -237,6 +237,7 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx
         mo.renderTilesScale = 1.0;
 
         mo.navigationType = vts::NavigationType::Instant;
+        mo.enableCameraAltitudeChanges = false;
     }
 
     {
