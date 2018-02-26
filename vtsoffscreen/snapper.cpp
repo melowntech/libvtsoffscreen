@@ -239,6 +239,12 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx
         mo.navigationType = vts::NavigationType::Instant;
         mo.enableCameraNormalization = false;
         mo.enableCameraAltitudeChanges = false;
+
+        mo.viewExtentLimitScaleMin = 0.0;
+        mo.viewExtentLimitScaleMax = std::numeric_limits<double>::max();
+
+        mo.tiltLimitAngleLow = 0.0;
+        mo.tiltLimitAngleHigh = 360.0;
     }
 
     {
