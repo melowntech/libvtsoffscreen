@@ -235,6 +235,8 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx
 
         // do not scale tiles
         mo.renderTilesScale = 1.0;
+
+        mo.navigationType = vts::NavigationType::Instant;
     }
 
     {

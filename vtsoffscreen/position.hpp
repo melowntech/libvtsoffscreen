@@ -67,7 +67,8 @@ struct OpticsPosition {
 
 #endif
 
-typedef boost::variant<VtsSerializedPosition
+typedef boost::variant<VtsJsonPosition
+                       , VtsSerializedPosition
 #ifdef VTSOFFSCREEN_HAS_OPTICS
                        , OpticsPosition
 #endif
