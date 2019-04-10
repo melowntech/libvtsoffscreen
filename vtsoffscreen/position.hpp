@@ -35,7 +35,7 @@
 #include "optics/camera.hpp"
 #endif
 
-namespace vts::offscreen {
+namespace vts { namespace offscreen {
 
 /** VTS position in JSON format.
  */
@@ -74,6 +74,6 @@ typedef boost::variant<VtsJsonPosition
 #endif
                        > Position;
 
-} // namespace vts::offscreen
+}} // namespace vts::offscreen
 
 #endif // vtsoffscreen_position_hpp_included_

@@ -41,7 +41,7 @@
 
 #include "./position.hpp"
 
-namespace vts::offscreen {
+namespace vts { namespace offscreen {
 
 using Image = cv::Mat_<cv::Vec3b>;
 
@@ -54,7 +54,7 @@ struct SnapperConfig {
      */
     geo::SrsDefinition customSrs1;
 
-    /** Custom SRS #1, passed to created VTS map.
+    /** Custom SRS #2, passed to created VTS map.
      */
     geo::SrsDefinition customSrs2;
 };
@@ -156,6 +156,6 @@ private:
     std::mutex requestsMutex_;
 };
 
-} // namespace vts::offscreen
+}} // namespace vts::offscreen
 
 #endif // vtsoffscreen_snapper_hpp_included_

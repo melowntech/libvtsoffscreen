@@ -29,10 +29,15 @@
 #include <limits>
 
 #include <vts-browser/map.hpp>
-#include <vts-browser/options.hpp>
+#include <vts-browser/mapOptions.hpp>
+#include <vts-browser/mapStatistics.hpp>
+#include <vts-browser/mapCallbacks.hpp>
+#include <vts-browser/camera.hpp>
+#include <vts-browser/cameraOptions.hpp>
+#include <vts-browser/navigation.hpp>
+#include <vts-browser/navigationOptions.hpp>
 #include <vts-browser/resources.hpp>
 #include <vts-browser/fetcher.hpp>
-#include <vts-browser/statistics.hpp>
 #include <vts-renderer/renderer.hpp>
 
 #include "dbglog/dbglog.hpp"
@@ -64,14 +69,14 @@ void* snapper_cpp_getGlProcAddress(const char *name)
 
 } // extern "C"
 
-namespace vts::offscreen {
+namespace vts { namespace offscreen {
 
 namespace {
 
 /** Creates EGL context and makes it current.
 *   Returned value must be kept to work.
  */
-glsupport::egl::Context
+std::pair<glsupport::egl::Context, glsupport::egl::Surface>
 eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
            , const math::Size2 &size = math::Size2(1, 1))
 {
@@ -94,7 +99,7 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
                 , EGL_GREEN_SIZE, 8
                 , EGL_RED_SIZE, 8
                 , EGL_ALPHA_SIZE, 0
-                , EGL_DEPTH_SIZE, 24
+                , EGL_DEPTH_SIZE, 0 // the vts renderer manages its own depth buffer
                 , EGL_STENCIL_SIZE, 0
                 , EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT
                 , EGL_NONE
@@ -109,15 +114,13 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
 
     auto ctx(context(dpy, configs));
     ctx.makeCurrent(surface);
-    return ctx;
+    return { std::move(ctx), std::move(surface) };
 }
 
-void loadGlFunctions()
+int loadGlFunctions()
 {
-    static std::mutex mutex;
-
-    std::lock_guard<std::mutex> lock(mutex);
     vts::renderer::loadGlFunctions(&snapper_cpp_getGlProcAddress);
+    return 0;
 }
 
 void waitForGl()
@@ -130,7 +133,7 @@ void waitForGl()
     while (::glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 500000000UL)
            == GL_TIMEOUT_EXPIRED)
     {
-        LOG(info1) << "GL: still wating for fence.";
+        LOG(info1) << "GL: still waiting for fence.";
     }
 
     ::glDeleteSync(fence);
@@ -194,90 +197,97 @@ public:
     Snapshot snap(const View &view);
 
 private:
-    Detail(const glsupport::egl::Context &ctx, const SnapperConfig &config);
+    Detail(const std::pair<glsupport::egl::Context,
+           glsupport::egl::Surface> &ctx, const SnapperConfig &config);
 
-    glsupport::egl::Context ctx_;
-    vts::Map map_;
-    vts::renderer::Renderer renderer_;
+    std::pair<glsupport::egl::Context, glsupport::egl::Surface> ctx_;
+    std::shared_ptr<vts::Map> map_;
+    std::shared_ptr<vts::Camera> camera_;
+    std::shared_ptr<vts::Navigation> navigation_;
+    std::shared_ptr<vts::renderer::RenderContext> context_;
+    std::shared_ptr<vts::renderer::RenderView> view_;
     bool mcReady_;
 };
 
-Snapper::Detail::Detail(const glsupport::egl::Context &ctx
-                        , const SnapperConfig &config)
+Snapper::Detail::Detail(const std::pair<glsupport::egl::Context,
+            glsupport::egl::Surface> &ctx, const SnapperConfig &config)
     : ctx_(ctx)
-    , map_([&]() -> vts::MapCreateOptions
-       {
-            vts::MapCreateOptions mco;
-            mco.clientId = "vadstena-simulator";
-            mco.customSrs1 = config.customSrs1.toString();
-            mco.customSrs2 = config.customSrs2.toString();
-            return mco;
-       }())
     , mcReady_(false)
 {
-    LOG(info3)
+    static int dummyLoadGlFunctions = loadGlFunctions();
+    (void)dummyLoadGlFunctions;
+
+    LOG(info4)
         << "Using OpenGL device: vendor: " << ::glGetString(GL_VENDOR)
         << ", renderer: " << ::glGetString(GL_RENDERER)
         << ", version: " << ::glGetString(GL_VERSION)
         << ".";
 
+    // create map, camera and navigation
     {
-        auto &mo(map_.options());
+        vts::MapCreateOptions mco;
+        mco.clientId = "vadstena-simulator";
+        mco.customSrs1 = config.customSrs1.toString();
+        mco.customSrs2 = config.customSrs2.toString();
+        map_ = std::make_shared<vts::Map>(mco,
+                    std::make_shared<Fetcher>(FetcherOptions()));
+        camera_ = map_->createCamera();
+        navigation_ = camera_->createNavigation();
+
+        // map options
+        auto &mo(map_->options());
         // always process everything
         mo.maxResourceProcessesPerTick
             = std::numeric_limits
             <decltype(mo.maxResourceProcessesPerTick)>::max();
         mo.fetchFirstRetryTimeOffset = 1;
-        mo.traverseMode = vts::TraverseMode::Flat;
-
         // TODO: query device
-        mo.targetResourcesMemory = 1500000000l;
-
+        mo.targetResourcesMemoryKB = 1500000l;
         // do not scale tiles
         mo.renderTilesScale = 1.0;
 
-        mo.navigationType = vts::NavigationType::Instant;
-        mo.enableCameraNormalization = false;
-        mo.enableCameraAltitudeChanges = false;
+        // camera options
+        auto &co(camera_->options());
+        co.traverseModeSurfaces = vts::TraverseMode::Flat;
+        co.traverseModeGeodata = vts::TraverseMode::Flat;
 
-        mo.viewExtentLimitScaleMin = 0.0;
-        mo.viewExtentLimitScaleMax = std::numeric_limits<double>::max();
-
-        mo.tiltLimitAngleLow = 0.0;
-        mo.tiltLimitAngleHigh = 360.0;
+        // navigation options
+        auto &no(navigation_->options());
+        no.navigationType = vts::NavigationType::Instant;
+        no.cameraNormalization = false;
+        no.cameraAltitudeChanges = false;
+        no.viewExtentLimitScaleMin = 0.0;
+        no.viewExtentLimitScaleMax = std::numeric_limits<double>::max();
+        no.tiltLimitAngleLow = 0.0;
+        no.tiltLimitAngleHigh = 360.0;
     }
 
+    // create render context and render view
     {
-        auto &cb(map_.callbacks());
+        context_ = std::make_shared<vts::renderer::RenderContext>();
+        context_->bindLoadFunctions(map_.get());
+        view_ = context_->createView(camera_.get());
+    }
 
-        renderer_.bindLoadFunctions(&map_);
-
+    // get notified when mapconfig is ready
+    {
+        auto &cb(map_->callbacks());
         // no need for shared pointer since map is member of this class
         cb.mapconfigReady = [=]() mutable {
             mcReady_ = true;
         };
     }
 
-    // notify the vts renderer library on how to load OpenGL function pointers
-    loadGlFunctions();
-
-    // and initialize the renderer library
-    // this will load required shaders and other local files
-    renderer_.initialize();
-
     // initialize map
-    map_.dataInitialize(std::make_shared<Fetcher>
-                        (vts::FetcherOptions()));
-    map_.renderInitialize();
-
-    map_.setMapConfigPath(config.mapConfigUrl, config.authUrl);
+    map_->dataInitialize();
+    map_->renderInitialize();
+    map_->setMapconfigPath(config.mapConfigUrl, config.authUrl);
 
     /** Pump until we have valid map config
      */
     while (!mcReady_) {
-        map_.dataTick();
-        map_.renderTickPrepare();
-        map_.renderTickRender();
+        map_->dataUpdate();
+        map_->renderUpdate(0);
         ::usleep(20);
     }
 
@@ -295,9 +305,8 @@ Snapper::Detail::Detail(const SnapperConfig &config
 
 Snapper::Detail::~Detail()
 {
-    renderer_.finalize();
-    map_.dataFinalize();
-    map_.renderFinalize();
+    map_->dataFinalize();
+    map_->renderFinalize();
 }
 namespace {
 
@@ -313,14 +322,15 @@ private:
 class PositionSetter : public boost::static_visitor<>
 {
 public:
-    PositionSetter(vts::Map &map) : map_(map) {}
+    PositionSetter(vts::Map &map, vts::Navigation &nav)
+        : map_(map), nav_(nav) {}
 
     void operator()(const VtsJsonPosition &position) const {
-        map_.setPositionJson(position.position);
+        nav_.setPositionJson(position.position);
     }
 
     void operator()(const VtsSerializedPosition &position) const {
-        map_.setPositionUrl(position.position);
+        nav_.setPositionUrl(position.position);
     }
 
 #ifdef VTSOFFSCREEN_HAS_OPTICS
@@ -335,6 +345,7 @@ public:
 
 private:
     vts::Map &map_;
+    vts::Navigation &nav_;
 };
 
 inline math::Point4 PositionSetter::prod1(const math::Point4 &p) const
@@ -371,9 +382,10 @@ void PositionSetter::operator()(const OpticsPosition &position) const {
 }
 #endif
 
-inline void setPosition(vts::Map &map, const Position &position)
+inline void setPosition(vts::Map &map,
+                vts::Navigation &nav, const Position &position)
 {
-    boost::apply_visitor(PositionSetter(map), position);
+    boost::apply_visitor(PositionSetter(map, nav), position);
 }
 
 } // namespace
@@ -381,38 +393,38 @@ inline void setPosition(vts::Map &map, const Position &position)
 Snapshot Snapper::Detail::snap(const View &view)
 {
     const auto screenSize(view.viewport.size());
-    map_.setWindowSize(screenSize.width, screenSize.height);
+    camera_->setViewportSize(screenSize.width, screenSize.height);
 
     // set temporary camera override hooks
-    MapCallbackHolder mch(map_);
+    //MapCallbackHolder mch(map_); // wtf?
 
     // set position
-    setPosition(map_, view.position);
+    setPosition(*map_, *navigation_, view.position);
 
     // wait till we have all resources for rendering, perform at least once to
     // allow position change
     do {
-        map_.dataTick();
-        map_.renderTickPrepare();
-        map_.renderTickRender();
+        map_->dataUpdate();
+        map_->renderUpdate(0);
+        camera_->renderUpdate();
         ::usleep(20);
-    } while (!map_.getMapRenderComplete());
+    } while (!map_->getMapRenderComplete());
 
-    auto &ro(renderer_.options());
+    auto &ro(view_->options());
     ro.width = screenSize.width;
     ro.height = screenSize.height;
     ro.renderAtmosphere = false;
     ro.colorToTargetFrameBuffer = false;
 
     // render
-    renderer_.render(&map_);
+    view_->render();
     waitForGl();
 
     // grab rendered image
     Snapshot snapshot(screenSize);
 
     // use render framebuffer and fetch image data (NB: BGR)
-    const auto &rv(renderer_.variables());
+    const auto &rv(view_->variables());
     ::glBindFramebuffer(GL_FRAMEBUFFER, rv.frameRenderBufferId);
     ::glPixelStorei(GL_PACK_ALIGNMENT, 1);
     ::glReadPixels(0, 0, screenSize.width, screenSize.height
@@ -422,7 +434,7 @@ Snapshot Snapper::Detail::snap(const View &view)
     // TODO: sample keypoinst
     for (const auto &keypoint : view.keypoints) {
         math::Point3 world;
-        renderer_.getWorldPosition(&keypoint[0], &world[0]);
+        view_->getWorldPosition(&keypoint[0], &world[0]);
         if (std::isnan(world(0))
             || std::isnan(world(1))
             || std::isnan(world(2)))
@@ -432,7 +444,7 @@ Snapshot Snapper::Detail::snap(const View &view)
         }
 
 
-        map_.convert(&world[0], &world[0], vts::Srs::Physical
+        map_->convert(&world[0], &world[0], vts::Srs::Physical
                      , vts::Srs::Custom1);
 
         snapshot.keypoints.emplace_back(keypoint, world);
@@ -548,5 +560,5 @@ void AsyncSnapper::worker(int threadId
     }
 }
 
-} // namespace vts::offscreen
+}} // namespace vts::offscreen
 
