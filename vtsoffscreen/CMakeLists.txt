@@ -23,6 +23,7 @@ define_module(LIBRARY vtsoffscreen=${vtsoffscreen_VERSION}
 
 set(vtsoffscreen_SOURCES
   snapper.hpp snapper.cpp
+  position.hpp
   )
 
 add_library(vtsoffscreen ${vtsoffscreen_SOURCES})

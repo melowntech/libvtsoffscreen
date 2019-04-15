@@ -55,14 +55,14 @@
 
 extern "C" {
 
-void* snapper_cpp_getGlProcAddress(const char *name)
+void *snapper_cpp_getGlProcAddress(const char *name)
 {
     ::dlerror();
     auto sym(::dlsym(RTLD_DEFAULT, name));
     if (auto error = ::dlerror()) {
-        LOGTHROW(err2, std::runtime_error)
+        LOG(warn2)
             << "Unable to get address of OpenGL function <"
-            << name << ": " << error << ".";
+            << name << ">: <" << error << ">.";
     }
     return sym;
 }
@@ -92,14 +92,15 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
     }
 
     // choose EGL configuration
+    // the vts renderer manages its own buffer, so we do not need any 'bits'
     const auto configs(chooseConfigs(dpy, {
                 EGL_SURFACE_TYPE, EGL_PBUFFER_BIT
                 , EGL_CONFORMANT, EGL_OPENGL_BIT
-                , EGL_BLUE_SIZE, 8
-                , EGL_GREEN_SIZE, 8
-                , EGL_RED_SIZE, 8
+                , EGL_BLUE_SIZE, 0
+                , EGL_GREEN_SIZE, 0
+                , EGL_RED_SIZE, 0
                 , EGL_ALPHA_SIZE, 0
-                , EGL_DEPTH_SIZE, 0 // the vts renderer manages its own depth buffer
+                , EGL_DEPTH_SIZE, 0
                 , EGL_STENCIL_SIZE, 0
                 , EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT
                 , EGL_NONE
@@ -112,7 +113,14 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
                 , EGL_NONE
           }));
 
-    auto ctx(context(dpy, configs));
+    auto ctx(context(dpy, configs, {
+                EGL_CONTEXT_MAJOR_VERSION, 3
+                , EGL_CONTEXT_MINOR_VERSION, 3
+#ifndef NDEBUG
+                , EGL_CONTEXT_OPENGL_DEBUG, EGL_TRUE
+#endif
+                , EGL_NONE
+             }));
     ctx.makeCurrent(surface);
     return { std::move(ctx), std::move(surface) };
 }
@@ -120,6 +128,7 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
 int loadGlFunctions()
 {
     vts::renderer::loadGlFunctions(&snapper_cpp_getGlProcAddress);
+    vts::renderer::installGlDebugCallback();
     return 0;
 }
 
@@ -217,16 +226,16 @@ Snapper::Detail::Detail(const std::pair<glsupport::egl::Context,
     static int dummyLoadGlFunctions = loadGlFunctions();
     (void)dummyLoadGlFunctions;
 
-    LOG(info4)
-        << "Using OpenGL device: vendor: " << ::glGetString(GL_VENDOR)
-        << ", renderer: " << ::glGetString(GL_RENDERER)
-        << ", version: " << ::glGetString(GL_VERSION)
-        << ".";
+    LOG(info3)
+        << "Using OpenGL device: vendor: <" << ::glGetString(GL_VENDOR)
+        << ">, renderer: <" << ::glGetString(GL_RENDERER)
+        << ">, version: <" << ::glGetString(GL_VERSION)
+        << ">.";
 
     // create map, camera and navigation
     {
         vts::MapCreateOptions mco;
-        mco.clientId = "vadstena-simulator";
+        mco.clientId = "vts-snapper";
         mco.customSrs1 = config.customSrs1.toString();
         mco.customSrs2 = config.customSrs2.toString();
         map_ = std::make_shared<vts::Map>(mco,
@@ -292,6 +301,7 @@ Snapper::Detail::Detail(const std::pair<glsupport::egl::Context,
     }
 
     // map config is ready we can proceed
+    LOG(info2) << "Proceed";
 }
 
 Snapper::Detail::Detail(const SnapperConfig &config)
@@ -309,15 +319,6 @@ Snapper::Detail::~Detail()
     map_->renderFinalize();
 }
 namespace {
-
-class MapCallbackHolder : boost::noncopyable {
-public:
-    MapCallbackHolder(vts::Map &map) : map_(map), mc_(map.callbacks()) {}
-    ~MapCallbackHolder() { map_.callbacks() = mc_; }
-private:
-    vts::Map &map_;
-    MapCallbacks mc_;
-};
 
 class PositionSetter : public boost::static_visitor<>
 {
@@ -392,28 +393,33 @@ inline void setPosition(vts::Map &map,
 
 Snapshot Snapper::Detail::snap(const View &view)
 {
+    vts::renderer::installGlDebugCallback();
+
     const auto screenSize(view.viewport.size());
     camera_->setViewportSize(screenSize.width, screenSize.height);
 
-    // set temporary camera override hooks
-    //MapCallbackHolder mch(map_); // wtf?
+    LOG(info2) << "Navigating";
 
     // set position
     setPosition(*map_, *navigation_, view.position);
 
-    // wait till we have all resources for rendering, perform at least once to
-    // allow position change
-    do {
-        map_->dataUpdate();
-        map_->renderUpdate(0);
-        camera_->renderUpdate();
-        ::usleep(20);
-    } while (!map_->getMapRenderComplete());
+    // wait till we have all resources for rendering
+    // perform a few times to allow position change to take effect
+    for (int i = 0; i < 3; i++)
+    {
+        do {
+            map_->dataUpdate();
+            map_->renderUpdate(0);
+            camera_->renderUpdate();
+            ::usleep(20);
+        } while (!map_->getMapRenderComplete());
+    }
+
+    LOG(info2) << "Rendering";
 
     auto &ro(view_->options());
     ro.width = screenSize.width;
     ro.height = screenSize.height;
-    ro.renderAtmosphere = false;
     ro.colorToTargetFrameBuffer = false;
 
     // render
@@ -421,17 +427,24 @@ Snapshot Snapper::Detail::snap(const View &view)
     waitForGl();
 
     // grab rendered image
-    Snapshot snapshot(screenSize);
+    Snapshot snapshot = Snapshot(screenSize);
 
     // use render framebuffer and fetch image data (NB: BGR)
     const auto &rv(view_->variables());
-    ::glBindFramebuffer(GL_FRAMEBUFFER, rv.frameRenderBufferId);
+    ::glBindFramebuffer(GL_READ_FRAMEBUFFER, rv.frameReadBufferId);
+    vts::renderer::checkGlFramebuffer(GL_READ_FRAMEBUFFER);
     ::glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    void *dst = (void*)snapshot.image.data;
+    assert(dst);
+    vts::renderer::checkGlImpl("1");
     ::glReadPixels(0, 0, screenSize.width, screenSize.height
-                   , GL_BGR, GL_UNSIGNED_BYTE, snapshot.image.data);
+                   , GL_BGR, GL_UNSIGNED_BYTE, dst);
+    vts::renderer::checkGlImpl("snapper");
+
+    LOG(info2) << "Post-processing";
+
     cv::flip(snapshot.image, snapshot.image, false);
 
-    // TODO: sample keypoinst
     for (const auto &keypoint : view.keypoints) {
         math::Point3 world;
         view_->getWorldPosition(&keypoint[0], &world[0]);
@@ -442,11 +455,8 @@ Snapshot Snapper::Detail::snap(const View &view)
             // invalid point
             continue;
         }
-
-
         map_->convert(&world[0], &world[0], vts::Srs::Physical
                      , vts::Srs::Custom1);
-
         snapshot.keypoints.emplace_back(keypoint, world);
     }
 
