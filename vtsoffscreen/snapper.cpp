@@ -60,7 +60,7 @@ void *snapper_cpp_getGlProcAddress(const char *name)
     ::dlerror();
     auto sym(::dlsym(RTLD_DEFAULT, name));
     if (auto error = ::dlerror()) {
-        LOG(warn2)
+        LOG(warn1)
             << "Unable to get address of OpenGL function <"
             << name << ">: <" << error << ">.";
     }
@@ -76,7 +76,7 @@ namespace {
 /** Creates EGL context and makes it current.
 *   Returned value must be kept to work.
  */
-std::pair<glsupport::egl::Context, glsupport::egl::Surface>
+glsupport::egl::Context
 eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
            , const math::Size2 &size = math::Size2(1, 1))
 {
@@ -116,19 +116,20 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
     auto ctx(context(dpy, configs, {
                 EGL_CONTEXT_MAJOR_VERSION, 3
                 , EGL_CONTEXT_MINOR_VERSION, 3
+                , EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                         EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT
 #ifndef NDEBUG
                 , EGL_CONTEXT_OPENGL_DEBUG, EGL_TRUE
 #endif
                 , EGL_NONE
              }));
     ctx.makeCurrent(surface);
-    return { std::move(ctx), std::move(surface) };
+    return ctx;
 }
 
 int loadGlFunctions()
 {
     vts::renderer::loadGlFunctions(&snapper_cpp_getGlProcAddress);
-    vts::renderer::installGlDebugCallback();
     return 0;
 }
 
@@ -206,10 +207,9 @@ public:
     Snapshot snap(const View &view);
 
 private:
-    Detail(const std::pair<glsupport::egl::Context,
-           glsupport::egl::Surface> &ctx, const SnapperConfig &config);
+    Detail(const glsupport::egl::Context &ctx, const SnapperConfig &config);
 
-    std::pair<glsupport::egl::Context, glsupport::egl::Surface> ctx_;
+    glsupport::egl::Context ctx_;
     std::shared_ptr<vts::Map> map_;
     std::shared_ptr<vts::Camera> camera_;
     std::shared_ptr<vts::Navigation> navigation_;
@@ -218,12 +218,12 @@ private:
     bool mcReady_;
 };
 
-Snapper::Detail::Detail(const std::pair<glsupport::egl::Context,
-            glsupport::egl::Surface> &ctx, const SnapperConfig &config)
+Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
+                        const SnapperConfig &config)
     : ctx_(ctx)
     , mcReady_(false)
 {
-    static int dummyLoadGlFunctions = loadGlFunctions();
+    static int dummyLoadGlFunctions = loadGlFunctions(); // just once
     (void)dummyLoadGlFunctions;
 
     LOG(info3)
@@ -231,6 +231,10 @@ Snapper::Detail::Detail(const std::pair<glsupport::egl::Context,
         << ">, renderer: <" << ::glGetString(GL_RENDERER)
         << ">, version: <" << ::glGetString(GL_VERSION)
         << ">.";
+
+    // setup opengl context
+    vts::renderer::installGlDebugCallback();
+    ::glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
     // create map, camera and navigation
     {
@@ -301,7 +305,7 @@ Snapper::Detail::Detail(const std::pair<glsupport::egl::Context,
     }
 
     // map config is ready we can proceed
-    LOG(info2) << "Proceed";
+    LOG(info2) << "Mapconfig is ready, we can proceed";
 }
 
 Snapper::Detail::Detail(const SnapperConfig &config)
@@ -393,37 +397,49 @@ inline void setPosition(vts::Map &map,
 
 Snapshot Snapper::Detail::snap(const View &view)
 {
-    vts::renderer::installGlDebugCallback();
-
     const auto screenSize(view.viewport.size());
     camera_->setViewportSize(screenSize.width, screenSize.height);
-
-    LOG(info2) << "Navigating";
-
-    // set position
-    setPosition(*map_, *navigation_, view.position);
-
-    // wait till we have all resources for rendering
-    // perform a few times to allow position change to take effect
-    for (int i = 0; i < 3; i++)
-    {
-        do {
-            map_->dataUpdate();
-            map_->renderUpdate(0);
-            camera_->renderUpdate();
-            ::usleep(20);
-        } while (!map_->getMapRenderComplete());
-    }
-
-    LOG(info2) << "Rendering";
 
     auto &ro(view_->options());
     ro.width = screenSize.width;
     ro.height = screenSize.height;
     ro.colorToTargetFrameBuffer = false;
 
-    // render
-    view_->render();
+    // set position
+    for (int i = 0; i < 3; i++)
+    {
+        setPosition(*map_, *navigation_, view.position);
+        // ensure the position change takes effect
+        map_->renderUpdate(0);
+        camera_->renderUpdate();
+        map_->dataUpdate();
+    }
+
+    // wait till we have all resources for rendering
+    {
+        int row = 0;
+        // repeat until two succesive renders
+        //   fully complete (do not request any more resources)
+        while (row < 2)
+        {
+            int cnt = 0;
+            do {
+                map_->renderUpdate(0);
+                camera_->renderUpdate();
+                map_->dataUpdate();
+                ::usleep(20);
+                cnt++;
+            } while (!map_->getMapRenderComplete());
+            if (cnt > 1)
+                row = 0;
+            else
+                row++;
+            // rendering may request more resources (eg. font textures)
+            view_->render();
+        }
+    }
+
+    // wait for gpu to finish
     waitForGl();
 
     // grab rendered image
@@ -433,18 +449,15 @@ Snapshot Snapper::Detail::snap(const View &view)
     const auto &rv(view_->variables());
     ::glBindFramebuffer(GL_READ_FRAMEBUFFER, rv.frameReadBufferId);
     vts::renderer::checkGlFramebuffer(GL_READ_FRAMEBUFFER);
-    ::glPixelStorei(GL_PACK_ALIGNMENT, 1);
     void *dst = (void*)snapshot.image.data;
     assert(dst);
     vts::renderer::checkGlImpl("1");
     ::glReadPixels(0, 0, screenSize.width, screenSize.height
                    , GL_BGR, GL_UNSIGNED_BYTE, dst);
     vts::renderer::checkGlImpl("snapper");
-
-    LOG(info2) << "Post-processing";
-
     cv::flip(snapshot.image, snapshot.image, false);
 
+    // keypoints
     for (const auto &keypoint : view.keypoints) {
         math::Point3 world;
         view_->getWorldPosition(&keypoint[0], &world[0]);
