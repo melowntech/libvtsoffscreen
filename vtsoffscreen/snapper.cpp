@@ -29,11 +29,9 @@
 #include <limits>
 
 #include <vts-browser/map.hpp>
-#include <vts-browser/mapOptions.hpp>
 #include <vts-browser/mapStatistics.hpp>
 #include <vts-browser/mapCallbacks.hpp>
 #include <vts-browser/camera.hpp>
-#include <vts-browser/cameraOptions.hpp>
 #include <vts-browser/navigation.hpp>
 #include <vts-browser/navigationOptions.hpp>
 #include <vts-browser/resources.hpp>
@@ -51,7 +49,7 @@
 
 #include "geo/csconvertor.hpp"
 
-#include "./snapper.hpp"
+#include "snapper.hpp"
 
 extern "C" {
 
@@ -193,6 +191,19 @@ private:
 
 } // namespace
 
+SnapperConfig::SnapperConfig()
+    : antialiasingSamples(0), renderAtmosphere(true)
+{
+    confMapCreate.clientId = "vts-snapper";
+    confMapRuntime.targetResourcesMemoryKB = 1500000l;
+    confCamera.traverseModeSurfaces = vts::TraverseMode::Flat;
+    confCamera.traverseModeGeodata = vts::TraverseMode::Flat;
+    confMapRuntime.maxResourceProcessesPerTick
+        = std::numeric_limits
+        <decltype(confMapRuntime.maxResourceProcessesPerTick)>::max();
+    confMapRuntime.fetchFirstRetryTimeOffset = 1;
+}
+
 Snapshot::Snapshot(const math::Size2 &size)
     : image(size.height, size.width, cv::Vec3b(0, 0, 255))
 {}
@@ -210,6 +221,7 @@ private:
     Detail(const glsupport::egl::Context &ctx, const SnapperConfig &config);
 
     glsupport::egl::Context ctx_;
+    const SnapperConfig config_;
     std::shared_ptr<vts::Map> map_;
     std::shared_ptr<vts::Camera> camera_;
     std::shared_ptr<vts::Navigation> navigation_;
@@ -221,6 +233,7 @@ private:
 Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
                         const SnapperConfig &config)
     : ctx_(ctx)
+    , config_(config)
     , mcReady_(false)
 {
     static int dummyLoadGlFunctions = loadGlFunctions(); // just once
@@ -238,8 +251,7 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
 
     // create map, camera and navigation
     {
-        vts::MapCreateOptions mco;
-        mco.clientId = "vts-snapper";
+        vts::MapCreateOptions mco = config.confMapCreate;
         mco.customSrs1 = config.customSrs1.toString();
         mco.customSrs2 = config.customSrs2.toString();
         map_ = std::make_shared<vts::Map>(mco,
@@ -247,22 +259,9 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
         camera_ = map_->createCamera();
         navigation_ = camera_->createNavigation();
 
-        // map options
-        auto &mo(map_->options());
-        // always process everything
-        mo.maxResourceProcessesPerTick
-            = std::numeric_limits
-            <decltype(mo.maxResourceProcessesPerTick)>::max();
-        mo.fetchFirstRetryTimeOffset = 1;
-        // TODO: query device
-        mo.targetResourcesMemoryKB = 1500000l;
-        // do not scale tiles
-        mo.renderTilesScale = 1.0;
-
-        // camera options
-        auto &co(camera_->options());
-        co.traverseModeSurfaces = vts::TraverseMode::Flat;
-        co.traverseModeGeodata = vts::TraverseMode::Flat;
+        // apply options
+        map_->options()= config.confMapRuntime;
+        camera_->options() = config.confCamera;
 
         // navigation options
         auto &no(navigation_->options());
@@ -404,6 +403,9 @@ Snapshot Snapper::Detail::snap(const View &view)
     ro.width = screenSize.width;
     ro.height = screenSize.height;
     ro.colorToTargetFrameBuffer = false;
+    ro.colorToTexture = true;
+    ro.antialiasingSamples = config_.antialiasingSamples;
+    ro.renderAtmosphere = config_.renderAtmosphere;
 
     // set position
     for (int i = 0; i < 3; i++)

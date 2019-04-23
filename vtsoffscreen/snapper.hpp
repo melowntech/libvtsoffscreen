@@ -36,6 +36,9 @@
 
 #include <opencv2/core/core.hpp>
 
+#include <vts-browser/mapOptions.hpp>
+#include <vts-browser/cameraOptions.hpp>
+
 #include "geo/srsdef.hpp"
 #include "glsupport/eglfwd.hpp"
 
@@ -57,6 +60,15 @@ struct SnapperConfig {
     /** Custom SRS #2, passed to created VTS map.
      */
     geo::SrsDefinition customSrs2;
+
+    MapCreateOptions confMapCreate;
+    MapRuntimeOptions confMapRuntime;
+    CameraOptions confCamera;
+
+    uint32 antialiasingSamples; // two or more to enable multisampling
+    bool renderAtmosphere;
+
+    SnapperConfig();
 };
 
 /** View definition.
