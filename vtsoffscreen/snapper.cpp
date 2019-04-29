@@ -406,6 +406,7 @@ Snapshot Snapper::Detail::snap(const View &view)
     ro.colorToTexture = true;
     ro.antialiasingSamples = config_.antialiasingSamples;
     ro.renderAtmosphere = config_.renderAtmosphere;
+    ro.geodataHysteresis = false;
 
     // set position
     for (int i = 0; i < 3; i++)
