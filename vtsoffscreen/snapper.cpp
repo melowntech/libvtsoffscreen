@@ -36,6 +36,7 @@
 #include <vts-browser/navigationOptions.hpp>
 #include <vts-browser/resources.hpp>
 #include <vts-browser/fetcher.hpp>
+#include <vts-browser/position.hpp>
 #include <vts-renderer/renderer.hpp>
 
 #include "dbglog/dbglog.hpp"
@@ -260,14 +261,14 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
         navigation_ = camera_->createNavigation();
 
         // apply options
-        map_->options()= config.confMapRuntime;
+        map_->options() = config.confMapRuntime;
         camera_->options() = config.confCamera;
 
         // navigation options
         auto &no(navigation_->options());
-        no.navigationType = vts::NavigationType::Instant;
-        no.cameraNormalization = false;
-        no.cameraAltitudeChanges = false;
+        no.type = vts::NavigationType::Instant;
+        no.enableNormalization = false;
+        no.enableAltitudeCorrections = false;
         no.viewExtentLimitScaleMin = 0.0;
         no.viewExtentLimitScaleMax = std::numeric_limits<double>::max();
         no.tiltLimitAngleLow = 0.0;
@@ -281,25 +282,14 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
         view_ = context_->createView(camera_.get());
     }
 
-    // get notified when mapconfig is ready
-    {
-        auto &cb(map_->callbacks());
-        // no need for shared pointer since map is member of this class
-        cb.mapconfigReady = [=]() mutable {
-            mcReady_ = true;
-        };
-    }
-
     // initialize map
-    map_->dataInitialize();
-    map_->renderInitialize();
     map_->setMapconfigPath(config.mapConfigUrl, config.authUrl);
 
     /** Pump until we have valid map config
      */
-    while (!mcReady_) {
-        map_->dataUpdate();
+    while (!map_->getMapconfigAvailable()) {
         map_->renderUpdate(0);
+        map_->dataUpdate();
         ::usleep(20);
     }
 
@@ -330,11 +320,11 @@ public:
         : map_(map), nav_(nav) {}
 
     void operator()(const VtsJsonPosition &position) const {
-        nav_.setPositionJson(position.position);
+        nav_.setPosition(vts::Position(position.position));
     }
 
     void operator()(const VtsSerializedPosition &position) const {
-        nav_.setPositionUrl(position.position);
+        nav_.setPosition(vts::Position(position.position));
     }
 
 #ifdef VTSOFFSCREEN_HAS_OPTICS
@@ -413,9 +403,10 @@ Snapshot Snapper::Detail::snap(const View &view)
     {
         setPosition(*map_, *navigation_, view.position);
         // ensure the position change takes effect
-        map_->renderUpdate(0);
         camera_->renderUpdate();
+        map_->renderUpdate(0);
         map_->dataUpdate();
+        ::usleep(20);
     }
 
     // wait till we have all resources for rendering
@@ -427,8 +418,8 @@ Snapshot Snapper::Detail::snap(const View &view)
         {
             int cnt = 0;
             do {
-                map_->renderUpdate(0);
                 camera_->renderUpdate();
+                map_->renderUpdate(0);
                 map_->dataUpdate();
                 ::usleep(20);
                 cnt++;
