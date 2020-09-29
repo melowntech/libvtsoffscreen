@@ -31,6 +31,7 @@
 #include <vts-browser/map.hpp>
 #include <vts-browser/mapStatistics.hpp>
 #include <vts-browser/mapCallbacks.hpp>
+#include <vts-browser/mapView.hpp>
 #include <vts-browser/camera.hpp>
 #include <vts-browser/navigation.hpp>
 #include <vts-browser/navigationOptions.hpp>
@@ -293,7 +294,13 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
         ::usleep(20);
     }
 
-    // map config is ready we can proceed
+    if (!config_.mapView.empty())
+    {
+        map_->setView("", MapView(config_.mapConfigUrl));
+        map_->selectView("");
+    }
+
+    // map config is ready, we can proceed
     LOG(info2) << "Mapconfig is ready, we can proceed";
 }
 
@@ -311,6 +318,7 @@ Snapper::Detail::~Detail()
     map_->dataFinalize();
     map_->renderFinalize();
 }
+
 namespace {
 
 class PositionSetter : public boost::static_visitor<>
@@ -445,7 +453,7 @@ Snapshot Snapper::Detail::snap(const View &view)
     vts::renderer::checkGlFramebuffer(GL_READ_FRAMEBUFFER);
     void *dst = (void*)snapshot.image.data;
     assert(dst);
-    vts::renderer::checkGlImpl("1");
+    vts::renderer::checkGlImpl("before glReadPixels");
     ::glReadPixels(0, 0, screenSize.width, screenSize.height
                    , GL_BGR, GL_UNSIGNED_BYTE, dst);
     vts::renderer::checkGlImpl("snapper");

@@ -50,8 +50,8 @@ using Image = cv::Mat_<cv::Vec3b>;
 
 struct SnapperConfig {
     std::string mapConfigUrl;
-
     std::string authUrl;
+    std::string mapView;
 
     /** Custom SRS #1, passed to created VTS map.
      */
