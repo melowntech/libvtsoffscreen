@@ -296,7 +296,7 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
 
     if (!config_.mapView.empty())
     {
-        map_->setView("", MapView(config_.mapConfigUrl));
+        map_->setView("", MapView(config_.mapView));
         map_->selectView("");
     }
 
