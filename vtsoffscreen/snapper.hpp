@@ -67,6 +67,8 @@ struct SnapperConfig {
 
     uint32 antialiasingSamples; // two or more to enable multisampling
     bool renderAtmosphere;
+    bool renderFlatShading;
+    bool renderWireframe;
 
     SnapperConfig();
 };

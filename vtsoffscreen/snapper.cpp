@@ -194,7 +194,8 @@ private:
 } // namespace
 
 SnapperConfig::SnapperConfig()
-    : antialiasingSamples(0), renderAtmosphere(true)
+    : antialiasingSamples(0), renderAtmosphere(true),
+      renderFlatShading(false), renderWireframe(false)
 {
     confMapCreate.clientId = "vts-snapper";
     confMapRuntime.targetResourcesMemoryKB = 1500000l;
@@ -402,9 +403,11 @@ Snapshot Snapper::Detail::snap(const View &view)
     ro.height = screenSize.height;
     ro.colorToTargetFrameBuffer = false;
     ro.colorToTexture = true;
+    ro.geodataHysteresis = false;
     ro.antialiasingSamples = config_.antialiasingSamples;
     ro.renderAtmosphere = config_.renderAtmosphere;
-    ro.geodataHysteresis = false;
+    ro.debugFlatShading = config_.renderFlatShading;
+    ro.debugWireframe = config_.renderWireframe;
 
     // set position
     for (int i = 0; i < 3; i++)
