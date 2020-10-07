@@ -204,7 +204,7 @@ SnapperConfig::SnapperConfig()
     confMapRuntime.maxResourceProcessesPerTick
         = std::numeric_limits
         <decltype(confMapRuntime.maxResourceProcessesPerTick)>::max();
-    confMapRuntime.fetchFirstRetryTimeOffset = 0; // all download retries should be immediate
+    confMapRuntime.fetchFirstRetryTimeOffset = 1;
 }
 
 Snapshot::Snapshot(const math::Size2 &size)
