@@ -140,7 +140,11 @@ private:
  */
 class AsyncSnapper : public boost::noncopyable {
 public:
+    // creates one snapper for each device available
     AsyncSnapper(const SnapperConfig &config);
+
+    // creates snapper on the provided device
+    AsyncSnapper(const SnapperConfig &config, const glsupport::egl::Device &device);
 
     ~AsyncSnapper();
 

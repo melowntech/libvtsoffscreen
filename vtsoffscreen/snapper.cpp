@@ -106,7 +106,7 @@ eglContext(const glsupport::egl::Device &device = glsupport::egl::Device()
                 , EGL_NONE
             }));
 
-    // create 1x1 surface, we do not use it for output
+    // create wxh surface
     auto surface(pbuffer(dpy, configs, {
                 EGL_WIDTH, size.width
                 , EGL_HEIGHT, size.height
@@ -198,13 +198,13 @@ SnapperConfig::SnapperConfig()
       renderFlatShading(false), renderWireframe(false)
 {
     confMapCreate.clientId = "vts-snapper";
-    confMapRuntime.targetResourcesMemoryKB = 1500000l;
+    confMapRuntime.targetResourcesMemoryKB = 0; // force to unload all resources as soon as possible
     confCamera.traverseModeSurfaces = vts::TraverseMode::Flat;
     confCamera.traverseModeGeodata = vts::TraverseMode::Flat;
     confMapRuntime.maxResourceProcessesPerTick
         = std::numeric_limits
         <decltype(confMapRuntime.maxResourceProcessesPerTick)>::max();
-    confMapRuntime.fetchFirstRetryTimeOffset = 1;
+    confMapRuntime.fetchFirstRetryTimeOffset = 0; // all download retries should be immediate
 }
 
 Snapshot::Snapshot(const math::Size2 &size)
@@ -271,9 +271,11 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
         no.type = vts::NavigationType::Instant;
         no.enableNormalization = false;
         no.enableAltitudeCorrections = false;
+        no.enableObstructionPrevention = false;
+        no.fpsCompensation = false;
         no.viewExtentLimitScaleMin = 0.0;
         no.viewExtentLimitScaleMax = std::numeric_limits<double>::max();
-        no.tiltLimitAngleLow = 0.0;
+        no.tiltLimitAngleLow = -360.0;
         no.tiltLimitAngleHigh = 360.0;
     }
 
@@ -316,8 +318,8 @@ Snapper::Detail::Detail(const SnapperConfig &config
 
 Snapper::Detail::~Detail()
 {
-    map_->dataFinalize();
     map_->renderFinalize();
+    map_->dataFinalize();
 }
 
 namespace {
@@ -423,9 +425,9 @@ Snapshot Snapper::Detail::snap(const View &view)
     // wait till we have all resources for rendering
     {
         int row = 0;
-        // repeat until two succesive renders
+        // repeat until three succesive renders
         //   fully complete (do not request any more resources)
-        while (row < 2)
+        while (row < 3)
         {
             int cnt = 0;
             do {
@@ -523,6 +525,25 @@ AsyncSnapper::AsyncSnapper(const SnapperConfig &config)
             (&AsyncSnapper::worker, this
              , -1, config, glsupport::egl::Device());
     }
+
+    guard.release();
+    running_ = true;
+
+    // TODO: add barrier to wait for snapper generation in the thread
+}
+
+AsyncSnapper::AsyncSnapper(const SnapperConfig &config, const glsupport::egl::Device &device)
+    : running_(false)
+{
+    // make sure threads are released when something goes wrong
+    struct Guard {
+        Guard(const std::function<void()> &func) : func(func) {}
+        ~Guard() { if (func) { func(); } }
+        void release() { func = {}; }
+        std::function<void()> func;
+    } guard([this]() { stop(); });
+
+    threads_.emplace_back(&AsyncSnapper::worker, this, -1, config, device);
 
     guard.release();
     running_ = true;
