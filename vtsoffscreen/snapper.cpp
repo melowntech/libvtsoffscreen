@@ -201,6 +201,7 @@ SnapperConfig::SnapperConfig()
     confMapRuntime.targetResourcesMemoryKB = 0; // force to unload all resources as soon as possible
     confCamera.traverseModeSurfaces = vts::TraverseMode::Flat;
     confCamera.traverseModeGeodata = vts::TraverseMode::Flat;
+    confCamera.lodBlending = 0;
     confMapRuntime.maxResourceProcessesPerTick
         = std::numeric_limits
         <decltype(confMapRuntime.maxResourceProcessesPerTick)>::max();
