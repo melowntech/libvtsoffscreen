@@ -518,7 +518,7 @@ AsyncSnapper::AsyncSnapper(const SnapperConfig &config)
         threads_.emplace_back
             (&AsyncSnapper::worker, this, threadId++, config, device);
         }
-    } catch (glsupport::egl::MissingExtension) {
+    } catch (const glsupport::egl::MissingExtension &) {
         LOG(warn2)
             << "Cannot probe available devices (extension unavailable). "
             << "Running on default native display.";
