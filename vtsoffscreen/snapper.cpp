@@ -283,6 +283,7 @@ Snapper::Detail::Detail(const glsupport::egl::Context &ctx,
     // create render context and render view
     {
         context_ = std::make_shared<vts::renderer::RenderContext>();
+        context_->options().enforceUsingMipMaps = true;
         context_->bindLoadFunctions(map_.get());
         view_ = context_->createView(camera_.get());
     }
