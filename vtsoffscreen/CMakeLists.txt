@@ -29,5 +29,5 @@ set(vtsoffscreen_SOURCES
 add_library(vtsoffscreen ${vtsoffscreen_SOURCES})
 target_link_libraries(vtsoffscreen
   ${MODULE_LIBRARIES} ${CMAKE_DL_LIBS})
-buildsys_target_compile_definitions(vtsoffscreen ${MODULE_DEFINITIONS})
+target_compile_definitions(vtsoffscreen PRIVATE ${MODULE_DEFINITIONS})
 buildsys_library(vtsoffscreen)
